@@ -1,4 +1,4 @@
-name: "GPU Tests"
+name: "GPU Tests CI"
 
 on:
   pull_request:
@@ -10,40 +10,61 @@ on:
       - 'README.md'
 
 jobs:
-  gpu-tests:
+  gpu-ci-tests:
     runs-on: linux-gpu-runner
 
     steps:
-    - name: Checkout
+    - name: Checkout Repository
       uses: actions/checkout@v4
       with:
-        # Checkout using commit hash to make "no-commit-to-branch" test pass.
         ref: ${{ github.sha }}
 
-    - name: Install uv
+    - name: Cache Python Dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+
+    - name: Install uv Package Manager
       uses: astral-sh/setup-uv@v2
       with:
         enable-cache: true
         cache-dependency-glob: "pyproject.toml"
 
-    - name: "Set up Python"
+    - name: "Set up Python 3.11"
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
 
     - name: Install Dependencies
       run: |
-        # Install in system python as we're in a sandbox env
-        # Install in verbose mode to see what's going on
         uv pip install -e '.[ci_gpu]' hf_transfer --system
+      env:
+        PIP_NO_CACHE_DIR: "off"
 
-    - name: Download Test Data
+    - name: Download Required Test Data
       run: |
         ./tests/scripts/predownload_for_github_gpu_tests.sh
 
-    - name: Run GPU tests
+    - name: Run GPU Tests
       run: |
         nvidia-smi
-
         cd ./tests/integration/
-        pytest -s -m "not e2e and not e2e_eternal and not multi_gpu" --durations=50 --timeout=300
+        pytest -s -m "not e2e and not e2e_eternal and not multi_gpu" --durations=50 --timeout=300 --junitxml=results.xml
+
+    - name: Upload Test Results
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: gpu-test-results
+        path: results.xml
+
+    - name: Slack Notification (Optional)
+      if: always()
+      uses: rtCamp/action-slack-notify@v2
+      env:
+        SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        SLACK_CHANNEL: "#ci-notifications"
+        SLACK_MESSAGE: "GPU Tests Completed: ${{ job.status }}"
